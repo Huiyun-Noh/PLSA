@@ -681,7 +681,6 @@ def _data_root():
 
 REAL_DATASETS = {
 
-
     "acm_dblp": ("load_acm_dblp_data",
                  lambda: dict(base=_data_root(), src_train_ratio=0.7), True),
     "cora":     ("load_cora_data",
@@ -923,7 +922,6 @@ def _build_cli():
     p.add_argument("--device", default="cuda", help="cuda / cpu")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-
     p1 = sub.add_parser("csbm",
                         help="CSBM Fig 1 (q-sweep) or Fig 2 (n-sweep)")
     p1.add_argument("--mode", choices=["fig1", "fig2"], required=True)
@@ -934,7 +932,6 @@ def _build_cli():
     p1.add_argument("--methods", nargs="+", default=["pairalign", "plsa"])
     p1.add_argument("--out", default=None, help="output JSONL path")
 
-
     p2 = sub.add_parser("csbm-calib",
                         help="CSBM Table 5 calibration ablation")
     p2.add_argument("--seeds", nargs="+", type=int, default=list(range(5)))
@@ -943,7 +940,6 @@ def _build_cli():
     p2.add_argument("--settings", nargs="+", default=None,
                     help="Subsets")
     p2.add_argument("--out", default=None, help="Output JSONL path.")
-
 
     p3 = sub.add_parser("real",
                         help="Real-data benchmark (ACM-DBLP, Cora, Twitch, Airport)")
@@ -979,7 +975,6 @@ def _build_cli():
     p3.add_argument("--iw-erm", action="store_true",
                     help="Weight the source classification loss of the GDA backbone "
                          "by the MLLS label-shift weights, for all models including plain.")
-
 
     return p
 

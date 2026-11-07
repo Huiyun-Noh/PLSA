@@ -56,8 +56,7 @@ location, so the working directory does not matter.
 
 `real` runs one hyperparameter setting for a given adaptation direction, GDA
 backbones (`--methods`), structure-correction models (`--models`), and seeds.
-Each run is written as one JSON line with `val_acc` and `test_acc`
-(default output: `real_results/real_<dataset>_<time>.jsonl`, or `--out`).
+Results are saved as JSON lines in `real_results/` (or the path given by `--out`).
 
 ```bash
 python run.py --device cuda real \
@@ -78,7 +77,7 @@ Table 4  --dataset airport  --src usa --tar brazil   |  --dataset airport  --src
 ```
 
 The reported results use the hyperparameter grid below (Appendix B.3 of the
-paper). For each direction, backbone, model, and seed, we run every
+paper). For each adaptation direction, backbone, model, and seed, we run every
 combination, select the one with the highest `val_acc`, and report its
 `test_acc`. Here `val_acc` is the accuracy on a labeled validation split of
 20% of the target nodes, and `test_acc` is the accuracy on the remaining 80%.
@@ -92,13 +91,14 @@ combination, select the one with the highest `val_acc`, and report its
 | `--lam-pair`  | 0, 0.1, 1, 10        | pairalign                |
 | `--lam-blend` | 0.2, 0.6, 1.0        | plsa, pairalign, strurw  |
 
-Two options handle label shift beyond the setting of Tables 1-4, and both are
-off by default. `--mmd-n-iters K` alternates MLLS label-shift estimation and
-feature alignment for `K` rounds; in each round, source nodes in the MMD term
-are sampled with probability proportional to the estimated label-shift
-weights. `--iw-erm` weights the source classification loss of the GDA
-backbone by the final MLLS label-shift weights, for all models including
-`plain` (with `--iw-erm`, `--lam-w` also affects `plain` and `strurw`).
+`real` also has two optional flags for label shift. Both are off by default
+and are not used for Tables 1-4.
+
+- `--mmd-n-iters K`: alternates MLLS label-shift estimation and feature
+  alignment for `K` rounds, sampling source nodes in the MMD term with
+  probability proportional to the estimated weights.
+- `--iw-erm`: weights the source classification loss of the GDA backbone by
+  the final MLLS weights, for all models including `plain`.
 
 ### Synthetic experiments
 
