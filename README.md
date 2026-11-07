@@ -43,8 +43,7 @@ data/airport_data/   airport_usa.npz  airport_brazil.npz  airport_europe.npz
 - **Airport**: Zhu et al. (2021b) flight-connection networks,
   [github.com/GentleZhu/EGI](https://github.com/GentleZhu/EGI/tree/main/data).
 
-Place the files as shown above; loader paths are anchored to `run.py`'s
-location, so the working directory does not matter.
+Place the files as shown above.
 
 ## Usage
 
@@ -87,14 +86,13 @@ combination, select the one with the highest `val_acc`, and report its
 | `--lam-pair`  | 0, 0.1, 1, 10        | pairalign                |
 | `--lam-blend` | 0.2, 0.6, 1.0        | plsa, pairalign, strurw  |
 
-`real` also has two optional flags for label shift. Both are off by default
-and are not used for Tables 1-4.
+`real` also has two optional flags for label shift. Both are off by default.
 
 - `--mmd-n-iters K`: alternates MLLS label-shift estimation and feature
   alignment for `K` rounds, sampling source nodes in the MMD term with
   probability proportional to the estimated weights.
 - `--iw-erm`: weights the source classification loss of the GDA backbone by
-  the final MLLS weights, for all models including `plain`.
+  the final MLLS weights.
 
 ### Synthetic experiments
 
