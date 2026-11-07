@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from typing import Dict
+from typing import Dict, Optional
 
 import numpy as np
 import torch
@@ -135,6 +135,8 @@ def train_sagda(
     weight_decay: float = 3e-3, adv_dim: int = 40,
     ppmi_path_len: int = 10,
     src_val_data=None,
+    *,
+    class_weights: Optional[Tensor] = None,
     **kwargs,
 ) -> Dict:
     
@@ -171,7 +173,7 @@ def train_sagda(
         h_t = att([h_t_gcn, h_t_ppmi])
 
         logits_s = model.classify(h_s)
-        loss_cls = loss_fn(logits_s, source_data.y)
+        loss_cls = F.cross_entropy(logits_s, source_data.y, weight=class_weights)
 
         d_s = domain_disc(_GradReverse.apply(h_s, alpha))
         d_t = domain_disc(_GradReverse.apply(h_t, alpha))

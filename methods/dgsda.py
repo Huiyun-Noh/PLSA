@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Dict
+from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
@@ -91,6 +91,8 @@ def train_dgsda(
     alpha_coeff: float = 1.0, beta_coeff: float = 0.5, gamma_coeff: float = 0.05,
     bern_K: int = 5,
     src_val_data=None,
+    *,
+    class_weights: Optional[Tensor] = None,
     **kwargs,
 ) -> Dict:
     model = GDABackbone(num_features, hidden, num_classes).to(device)
@@ -121,7 +123,7 @@ def train_dgsda(
         h_t = model.encode(x_t, target_data.edge_index)
     
         logits_s = model.classify(h_s)
-        loss_cls = F.cross_entropy(logits_s, source_data.y)
+        loss_cls = F.cross_entropy(logits_s, source_data.y, weight=class_weights)
 
         loss_filter = F.l1_loss(
             F.relu(bern_src.temp), F.relu(bern_tgt.temp)

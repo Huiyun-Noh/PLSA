@@ -317,55 +317,6 @@ def train_source_pipeline(bundle, seed, device, *, calib='bcts',
     )
 
 
-def fit_pairalign(bundle, pipe, *, lam_pair=1.0, lam_blend=1.0, device='cuda',
-                   solver='CLARABEL'):
-    A_s = bundle.src_train.A.toarray()
-    A_t = bundle.target.A.toarray()
-    pair = PairAlign(lam=lam_pair, solver=solver, symmetrize=True, pred_batch_size=256)
-    pair.fit(A_s, bundle.src_train.y, A_t,
-             bundle.src_train.X, bundle.target.X, pipe['model'], device)
-    _, R_raw = pair.get_weights()
-    R = R_raw / np.outer(pipe['w_imp'], pipe['w_imp'])
-    R_blended = (1.0 - lam_blend) + lam_blend * R
-    return np.clip(R_blended, R_CLIP_MIN, R_CLIP_MAX)
-
-
-def fit_strurw(bundle, pipe, *, lam_blend=1.0, device='cuda'):
-    A_s = bundle.src_train.A.toarray()
-    A_t = bundle.target.A.toarray()
-    sw = StruRW(symmetrize=True, pred_batch_size=256)
-    sw.fit(A_s, bundle.src_train.y, A_t,
-           bundle.src_train.X, bundle.target.X, pipe['model'], device)
-    R_raw = sw.get_weights()
-    R_blended = (1.0 - lam_blend) + lam_blend * R_raw
-    return np.clip(R_blended, R_CLIP_MIN, R_CLIP_MAX)
-
-
-def fit_plsa(bundle, pipe, *, seed, device,
-               lam_plsa=0.0, lam_blend=1.0,
-               smooth_T=1.0):
-
-    F_soft = apply_prob_temperature(pipe['F_pre'], smooth_T)
-    F_mix  = F_soft
-    A_s = bundle.src_train.A.toarray()
-    A_t = bundle.target.A.toarray()
-
-    set_seed(seed)
-    plsa = PLSA(**PLSA_DEFAULTS, lam=lam_plsa)
-    plsa.fit(A_s, bundle.src_train.y, A_t, bundle.target.X,
-                pipe['model'], device, T=pipe['T'], bias=pipe['bias'],
-                F_precomputed=F_mix)
-    W = plsa.get_weights()
-
-    p_edge_S = edge_rate_uppertri(A_s)
-    p_edge_T = edge_rate_uppertri(A_t)
-    R_joint = W * (p_edge_T / (p_edge_S + 1e-12))
-
-    R_raw = R_joint / np.outer(pipe['w_imp'], pipe['w_imp'])
-    R_blended = (1.0 - lam_blend) + lam_blend * R_raw
-    return np.clip(R_blended, R_CLIP_MIN, R_CLIP_MAX), plsa
-
-
 def _stratified_target_val_test_mask(y_long, val_ratio=0.2, seed=0):
     
     y = y_long.view(-1).cpu().numpy()
@@ -388,7 +339,7 @@ def _stratified_target_val_test_mask(y_long, val_ratio=0.2, seed=0):
 
 
 def run_downstream_gda(bundle, R, gda_method, seed, device, *, num_samples=1,
-                        target_val_ratio=0.2):
+                        target_val_ratio=0.2, class_weights=None):
     A_src_csr = csr_matrix(bundle.src_train.A)
 
     if R is not None:
@@ -409,11 +360,14 @@ def run_downstream_gda(bundle, R, gda_method, seed, device, *, num_samples=1,
     src_val_data = prepare_graph_data(csr_matrix(bundle.src_val.A),
                                        bundle.src_val.X, bundle.src_val.y).to(device)
 
+    if class_weights is not None:
+        class_weights = torch.as_tensor(class_weights, dtype=torch.float32, device=device)
+
     set_seed(seed)
     train_fn = GDA_METHODS[gda_method]
     result = train_fn(source_data=source_data, target_data=target_data,
                       num_features=bundle.num_features, num_classes=bundle.num_classes,
-                      device=device, src_val_data=src_val_data,
+                      device=device, src_val_data=src_val_data, class_weights=class_weights,
                       **GDA_DEFAULTS[gda_method])
     target_all = dict(result['target_all'])
 
@@ -434,44 +388,6 @@ def run_downstream_gda(bundle, R, gda_method, seed, device, *, num_samples=1,
         for k, v in test_m.items():
             target_all[f'test_{k}'] = v
     return target_all
-
-
-def run_one(bundle, *, method, model, seed, device, hp):
-    set_seed(seed)
-
-    bundle = mmd_align(bundle, hp.get('mmd_lam'), device, seed=seed,
-                        n_iters=int(hp.get('mmd_n_iters', 0)))
-
-    if model == 'plain':
-        return run_downstream_gda(
-            bundle, R=None, gda_method=method, seed=seed, device=device,
-            num_samples=hp.get('num_samples', 1),
-        )
-
-    pipe = train_source_pipeline(
-        bundle, seed, device,
-        calib=hp.get('calib', 'bcts'),
-        lam_w=hp.get('lam_w', 0.0),
-    )
-
-    if model == 'plsa':
-        R, _ = fit_plsa(bundle, pipe, seed=seed, device=device,
-                           lam_plsa=hp.get('lam_plsa', 0.0),
-                           lam_blend=hp.get('lam_blend', 1.0),
-                           smooth_T=hp.get('smooth_T', 1.0))
-    elif model == 'pairalign':
-        R = fit_pairalign(bundle, pipe, lam_pair=hp.get('lam_pair', 0.0),
-                           lam_blend=hp.get('lam_blend', 1.0),
-                           device=device, solver=hp.get('solver', 'CLARABEL'))
-    elif model == 'strurw':
-        R = fit_strurw(bundle, pipe, lam_blend=hp.get('lam_blend', 1.0), device=device)
-    else:
-        raise ValueError(f"Unknown model: {model}")
-
-    return run_downstream_gda(
-        bundle, R, gda_method=method, seed=seed, device=device,
-        num_samples=hp.get('num_samples', 1),
-    )
 
 
 CSBM_MLP_DEFAULTS    = dict(depth=2, hidden1=32)
@@ -822,25 +738,6 @@ def _hp_from_args(args):
     return {k: v for k, v in hp.items() if v is not None}
 
 
-def _load_real_bundle_direct(dataset, src, tar, k_labels):
-    from utils import data as data_mod
-    if dataset not in REAL_DATASETS:
-        raise SystemExit(f"Unknown dataset {dataset}")
-    loader_name, defaults_fn, supports_src_tar = REAL_DATASETS[dataset]
-    loader = getattr(data_mod, loader_name)
-    kwargs = defaults_fn()
-    if supports_src_tar:
-        if not src or not tar:
-            raise SystemExit(f"src/tar required for {dataset}")
-        kwargs.update(src=src, tar=tar)
-        label = f"{dataset}:{src}->{tar}"
-    else:
-        if k_labels is not None:
-            kwargs["k_labels"] = k_labels
-        label = f"cora_L{kwargs.get('k_labels', 6)}"
-    return loader(**kwargs), label
-
-
 def _cli_real(args, device):
     import gc
     import json
@@ -862,18 +759,22 @@ def _cli_real(args, device):
     print(f"Models:   {args.models}")
     print(f"Seeds:    {args.seeds}")
     print(f"HP:       {hp}")
+    print(f"IW-ERM:   {bool(args.iw_erm)}")
     print(f"Output:   {args.out}")
 
+    del bundle
     with open(args.out, "w") as fout:
-        for method in args.methods:
-            for model in args.models:
-                for seed in args.seeds:
+        for seed in args.seeds:
+            cache = _RunCache(lambda: _load_real_bundle(args)[0], seed, device)
+            for method in args.methods:
+                for model in args.models:
                     print(f"\n=== {label}  method={method}  model={model}  "
                           f"seed={seed} ===")
                     t0 = time.time()
                     try:
-                        result = run_one(bundle, method=method, model=model,
-                                         seed=seed, device=device, hp=hp)
+                        result = _run_one(cache, method=method, model=model,
+                                          hp=hp, seed=seed, device=device,
+                                          iw_erm=args.iw_erm)
                         acc = float(result.get("acc", float("nan")))
                         val_acc = float(result.get("val_acc", float("nan")))
                         test_acc = float(result.get("test_acc", float("nan")))
@@ -888,7 +789,7 @@ def _cli_real(args, device):
                                acc=acc, val_acc=val_acc, test_acc=test_acc,
                                status=status,
                                runtime_s=round(time.time() - t0, 3),
-                               hp=hp)
+                               hp=hp, iw_erm=bool(args.iw_erm))
                     fout.write(json.dumps(rec) + "\n")
                     fout.flush()
                     print(f"  all={acc:.4f}  val={val_acc:.4f}  test={test_acc:.4f}  "
@@ -900,47 +801,7 @@ def _cli_real(args, device):
     print(f"\nDone. Wrote: {args.out}")
 
 
-SWEEP_DEFAULT_GRIDS = {
-    "mmd_lam":     [0.01, 0.1, 1.0],
-    # mmd_n_iters=0 (the only default value) is the paper's one-shot alignment.
-    # >0 is a post-submission extension; override via --mmd_n_iters on the CLI.
-    "mmd_n_iters": [0],
-    "lam_w":       [0.0, 0.1, 1.0],
-    "lam_blend":   [0.2, 0.6, 1.0],
-    "lam_pair":    [0, 0.1, 1.0, 10.0],
-    "lam_plsa":    [0, 0.01, 0.1, 0.5],
-    "smooth_T":    [0.1, 0.5, 1.0, 2.5],
-}
-
-SWEEP_RELEVANT_HP = {
-    "plain":     {"mmd_lam", "mmd_n_iters"},
-    "plsa":      {"mmd_lam", "mmd_n_iters", "lam_w", "lam_plsa", "lam_blend", "smooth_T"},
-    "pairalign": {"mmd_lam", "mmd_n_iters", "lam_w", "lam_pair", "lam_blend"},
-    "strurw":    {"mmd_lam", "mmd_n_iters", "lam_blend"},
-}
-
-_REAL_DEFAULT_DIRS = {
-    "acm_dblp": [("acm", "dblp"), ("dblp", "acm")],
-    "twitch":   [("DE", "ENGB"), ("ENGB", "DE")],
-    "airport":  [("usa", "brazil"), ("usa", "europe")],
-    "cora":     [(None, None)],
-}
-
-
-def _expand_hp_grid(grids, model):
-    from itertools import product
-    relevant = SWEEP_RELEVANT_HP[model]
-    fit_keys = [k for k in grids if k in relevant and k != "lam_blend"]
-    blend_grid = (grids["lam_blend"] if "lam_blend" in relevant else [None])
-    for fit_combo in product(*[grids[k] for k in fit_keys]):
-        for blend in blend_grid:
-            combo = dict(zip(fit_keys, fit_combo))
-            if blend is not None:
-                combo["lam_blend"] = blend
-            yield combo
-
-
-class _SweepCache:
+class _RunCache:
     def __init__(self, loader_fn, seed, device):
         self._loader = loader_fn
         self.seed = seed
@@ -987,14 +848,15 @@ class _SweepCache:
             self._plsa[key] = R_joint / np.outer(pipe["w_imp"], pipe["w_imp"])
         return self._plsa[key]
 
-    def get_pair_R_raw(self, mmd_lam, n_iters, calib, lam_w, lam_pair):
-        key = (mmd_lam, n_iters, calib, lam_w, lam_pair)
+    def get_pair_R_raw(self, mmd_lam, n_iters, calib, lam_w, lam_pair,
+                       solver="CLARABEL"):
+        key = (mmd_lam, n_iters, calib, lam_w, lam_pair, solver)
         if key not in self._pair:
             b = self.get_bundle(mmd_lam, n_iters)
             pipe = self.get_pipe(mmd_lam, n_iters, calib, lam_w)
             A_s = b.src_train.A.toarray()
             A_t = b.target.A.toarray()
-            pair = PairAlign(lam=lam_pair, solver="CLARABEL",
+            pair = PairAlign(lam=lam_pair, solver=solver,
                              symmetrize=True, pred_batch_size=256)
             pair.fit(A_s, b.src_train.y, A_t,
                      b.src_train.X, b.target.X, pipe["model"], self.device)
@@ -1016,25 +878,31 @@ class _SweepCache:
         return self._strurw[key]
 
 
-def _run_one_cached(cache, *, method, model, hp, seed, device):
+def _run_one(cache, *, method, model, hp, seed, device, iw_erm=False):
     mmd_lam = hp.get("mmd_lam")
     n_iters = int(hp.get("mmd_n_iters", 0))
     b = cache.get_bundle(mmd_lam, n_iters)
 
-    if model == "plain":
-        return run_downstream_gda(b, R=None, gda_method=method, seed=seed,
-                                  device=device,
-                                  num_samples=hp.get("num_samples", 1))
-
     calib = hp.get("calib", "bcts")
     lam_w = hp.get("lam_w", 0.0)
+    class_weights = None
+    if iw_erm:
+        # Share the final MLLS estimate across all backbones and graph variants.
+        class_weights = cache.get_pipe(mmd_lam, n_iters, calib, lam_w)["w_imp"]
+
+    if model == "plain":
+        return run_downstream_gda(b, R=None, gda_method=method, seed=seed,
+                                  device=device, class_weights=class_weights,
+                                  num_samples=hp.get("num_samples", 1))
+
     if model == "plsa":
         R_raw = cache.get_plsa_R_raw(mmd_lam, n_iters, calib, lam_w,
                                      hp.get("lam_plsa", 0.0),
                                      hp.get("smooth_T", 1.0))
     elif model == "pairalign":
         R_raw = cache.get_pair_R_raw(mmd_lam, n_iters, calib, lam_w,
-                                     hp.get("lam_pair", 0.0))
+                                     hp.get("lam_pair", 0.0),
+                                     hp.get("solver", "CLARABEL"))
     elif model == "strurw":
         R_raw = cache.get_strurw_R_raw(mmd_lam, n_iters, calib, lam_w)
     else:
@@ -1044,125 +912,14 @@ def _run_one_cached(cache, *, method, model, hp, seed, device):
     R = (1.0 - lam_blend) + lam_blend * R_raw
     R = np.clip(R, R_CLIP_MIN, R_CLIP_MAX)
     return run_downstream_gda(b, R, gda_method=method, seed=seed,
-                              device=device,
+                              device=device, class_weights=class_weights,
                               num_samples=hp.get("num_samples", 1))
-
-
-def _cli_real_sweep(args, device):
-    import csv
-    import gc
-    from pathlib import Path
-
-    grids = {hp: (getattr(args, hp) if getattr(args, hp) is not None
-                  else SWEEP_DEFAULT_GRIDS[hp])
-             for hp in SWEEP_DEFAULT_GRIDS}
-
-    if args.src and args.tar:
-        directions = [(args.src, args.tar, None)]
-    elif args.dataset == "cora":
-        ks = args.k_labels if args.k_labels else [6, 8]
-        directions = [(None, None, k) for k in ks]
-    else:
-        directions = [(s, t, None) for s, t in _REAL_DEFAULT_DIRS[args.dataset]]
-
-    out_dir = Path(__file__).resolve().parent / "sweep_results"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    if args.out is None:
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        args.out = str(out_dir / f"sweep_{args.dataset}_{ts}.csv")
-
-    cols = ["dataset", "direction", "method", "model", "seed",
-            "mmd_lam", "mmd_n_iters", "lam_w", "lam_plsa", "lam_blend",
-            "lam_pair", "smooth_T",
-            "acc", "macro_f1", "micro_f1", "loss",
-            "val_acc", "val_macro_f1", "val_micro_f1", "val_loss",
-            "test_acc", "test_macro_f1", "test_micro_f1", "test_loss",
-            "srcval_acc", "srcval_macro_f1", "srcval_micro_f1", "srcval_loss"]
-
-    n_rows = 0
-    for model in args.models:
-        n_hp = 1
-        for hp in SWEEP_DEFAULT_GRIDS:
-            if hp in SWEEP_RELEVANT_HP[model]:
-                n_hp *= len(grids[hp])
-        n_rows += len(args.methods) * len(directions) * len(args.seeds) * n_hp
-
-    print(f"Device:    {device}")
-    print(f"Dataset:   {args.dataset}")
-    print(f"Methods:   {args.methods}")
-    print(f"Models:    {args.models}")
-    print(f"Seeds:     {args.seeds}")
-    print(f"Directions: {directions}")
-    print(f"HP grids:")
-    for hp, g in grids.items():
-        print(f"  {hp:>10}: {g}")
-    print(f"Total rows: {n_rows}")
-    print(f"Output:    {args.out}")
-
-    done = 0
-    with open(args.out, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=cols)
-        w.writeheader()
-        for src, tar, k in directions:
-            label = (f"{src}->{tar}" if src
-                     else f"cora_L{k if k is not None else 6}")
-            for seed in args.seeds:
-                loader = (lambda s=src, t=tar, kk=k:
-                          _load_real_bundle_direct(args.dataset, s, t, kk)[0])
-                cache = _SweepCache(loader, seed, device)
-                for method in args.methods:
-                    for model in args.models:
-                        for hp_combo in _expand_hp_grid(grids, model):
-                            done += 1
-                            try:
-                                ta = _run_one_cached(cache, method=method,
-                                                     model=model, hp=hp_combo,
-                                                     seed=seed, device=device)
-                                row = dict(dataset=args.dataset, direction=label,
-                                           method=method, model=model, seed=seed,
-                                           acc=ta["acc"], macro_f1=ta["macro_f1"],
-                                           micro_f1=ta["micro_f1"], loss=ta["loss"],
-                                           val_acc=ta.get("val_acc", ""),
-                                           val_macro_f1=ta.get("val_macro_f1", ""),
-                                           val_micro_f1=ta.get("val_micro_f1", ""),
-                                           val_loss=ta.get("val_loss", ""),
-                                           test_acc=ta.get("test_acc", ""),
-                                           test_macro_f1=ta.get("test_macro_f1", ""),
-                                           test_micro_f1=ta.get("test_micro_f1", ""),
-                                           test_loss=ta.get("test_loss", ""),
-                                           srcval_acc=ta.get("srcval_acc", ""),
-                                           srcval_macro_f1=ta.get("srcval_macro_f1", ""),
-                                           srcval_micro_f1=ta.get("srcval_micro_f1", ""),
-                                           srcval_loss=ta.get("srcval_loss", ""))
-                                acc_str = (f"all={ta['acc']:.3f} "
-                                           f"val={ta.get('val_acc', float('nan')):.3f} "
-                                           f"test={ta.get('test_acc', float('nan')):.3f} "
-                                           f"srcval={ta.get('srcval_acc', float('nan')):.3f}")
-                            except Exception as e:
-                                row = dict(dataset=args.dataset, direction=label,
-                                           method=method, model=model, seed=seed,
-                                           acc="", macro_f1="", micro_f1="", loss="",
-                                           val_acc="", val_macro_f1="", val_micro_f1="", val_loss="",
-                                           test_acc="", test_macro_f1="", test_micro_f1="", test_loss="",
-                                           srcval_acc="", srcval_macro_f1="", srcval_micro_f1="", srcval_loss="")
-                                acc_str = f"ERROR: {type(e).__name__}"
-                            for hp_name in SWEEP_DEFAULT_GRIDS:
-                                row[hp_name] = hp_combo.get(hp_name, "")
-                            w.writerow(row)
-                            f.flush()
-                            print(f"[{done}/{n_rows}] {method}+{model} {label} "
-                                  f"seed={seed} {acc_str} hp={hp_combo}")
-                del cache
-                gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-    print(f"\nDone. Wrote: {args.out}")
 
 
 def _build_cli():
     import argparse
     p = argparse.ArgumentParser(
-        description="Unified pipeline CLI: csbm, csbm-calib, real, real-sweep.")
+        description="Unified pipeline CLI: csbm, csbm-calib, real.")
     p.add_argument("--device", default="cuda", help="cuda / cpu")
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -1219,27 +976,10 @@ def _build_cli():
                     help="CVXPY solver for PairAlign (CLARABEL / SCS)")
     p3.add_argument("--lam-blend", type=float, default=None)
     p3.add_argument("--num-samples", type=int, default=None)
+    p3.add_argument("--iw-erm", action="store_true",
+                    help="Weight the source classification loss of the GDA backbone "
+                         "by the MLLS label-shift weights, for all models including plain.")
 
-
-    p4 = sub.add_parser("real-sweep",
-                        help="Real-data HP sweep with per-(direction, seed) cache. "
-                             "Outputs one CSV row per (method, model, direction, seed, HP combo).")
-    p4.add_argument("--dataset", required=True, choices=list(REAL_DATASETS))
-    p4.add_argument("--src", default=None)
-    p4.add_argument("--tar", default=None)
-    p4.add_argument("--k-labels", type=int, nargs="*", default=None,
-                    help="cora only: top-k label filter list (e.g. 6 8)")
-    p4.add_argument("--methods", nargs="+",
-                    default=["a2gnn", "specreg", "dgsda", "sagda"],
-                    help="GDA backbones")
-    p4.add_argument("--models", nargs="+",
-                    default=["plain", "plsa", "pairalign", "strurw"])
-    p4.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2, 3, 4])
-    p4.add_argument("--out", default=None, help="Output CSV path.")
-
-    for hp_name, default in SWEEP_DEFAULT_GRIDS.items():
-        p4.add_argument(f"--{hp_name}", type=float, nargs="+", default=None,
-                        help=f"sweep grid for {hp_name} (default: {default})")
 
     return p
 
@@ -1255,8 +995,6 @@ def main():
         _cli_csbm_calib(args, device)
     elif args.cmd == "real":
         _cli_real(args, device)
-    elif args.cmd == "real-sweep":
-        _cli_real_sweep(args, device)
     else:
         raise SystemExit(f"Unknown subcommand: {args.cmd}")
 

@@ -6,7 +6,7 @@ Twitch, CORA, Airport) experiments.
 ## Repository layout
 
 ```text
-run.py          # Main CLI: csbm / csbm-calib / real / real-sweep
+run.py          # Main CLI: csbm / csbm-calib / real
 methods/        # Downstream GDA backbones (a2gnn, specreg, dgsda, sagda)
 models/         # Reweighting / predictor modules (plsa, pairalign, strurw, ...)
 utils/          # Data loading, calibration, metrics, graph utilities
@@ -52,45 +52,57 @@ location, so the working directory does not matter.
 
 ## Usage
 
-**Quick sanity check** (single HP combo, seconds):
+### Real-data experiments (Tables 1-4)
+
+`real` runs one hyperparameter setting for a given adaptation direction, GDA
+backbones (`--methods`), structure-correction models (`--models`), and seeds.
+Each run is written as one JSON line with `val_acc` and `test_acc`
+(default output: `real_results/real_<dataset>_<time>.jsonl`, or `--out`).
 
 ```bash
 python run.py --device cuda real \
   --dataset acm_dblp --src acm --tar dblp \
   --methods a2gnn specreg dgsda sagda \
   --models plain plsa pairalign strurw \
-  --seeds 0 1 2 3 4
+  --seeds 0 1 2 3 4 \
+  --mmd-lam 0.1 --lam-w 0.0 --lam-plsa 0.0 --smooth-T 1.0 --lam-pair 0.0 --lam-blend 1.0
 ```
 
-**Full reproduction** uses `real-sweep`, which runs the paper's full
-hyperparameter grid and selects per-(direction, backbone, model, seed) by
-validation accuracy before reporting test accuracy:
+The other settings in the paper are
+
+```text
+Table 1  --dataset acm_dblp --src acm --tar dblp     |  --dataset acm_dblp --src dblp --tar acm
+Table 2  --dataset twitch   --src DE  --tar ENGB     |  --dataset twitch   --src ENGB --tar DE
+Table 3  --dataset cora     --k-labels 6             |  --dataset cora     --k-labels 8
+Table 4  --dataset airport  --src usa --tar brazil   |  --dataset airport  --src usa  --tar europe
+```
+
+The reported results use the hyperparameter grid below (Appendix B.3 of the
+paper). For each direction, backbone, model, and seed, we run every
+combination, select the one with the highest `val_acc`, and report its
+`test_acc`. Here `val_acc` is the accuracy on a labeled validation split of
+20% of the target nodes, and `test_acc` is the accuracy on the remaining 80%.
+
+| Flag          | Values               | Models                   |
+|---------------|----------------------|--------------------------|
+| `--mmd-lam`   | 0.01, 0.1, 1.0       | all                      |
+| `--lam-w`     | 0, 0.1, 1.0          | plsa, pairalign          |
+| `--lam-plsa`  | 0, 0.01, 0.1, 0.5    | plsa                     |
+| `--smooth-T`  | 0.1, 0.5, 1.0, 2.5   | plsa                     |
+| `--lam-pair`  | 0, 0.1, 1, 10        | pairalign                |
+| `--lam-blend` | 0.2, 0.6, 1.0        | plsa, pairalign, strurw  |
+
+Two options handle label shift beyond the setting of Tables 1-4, and both are
+off by default. `--mmd-n-iters K` alternates MLLS label-shift estimation and
+feature alignment for `K` rounds; in each round, source nodes in the MMD term
+are sampled with probability proportional to the estimated label-shift
+weights. `--iw-erm` weights the source classification loss of the GDA
+backbone by the final MLLS label-shift weights, for all models including
+`plain` (with `--iw-erm`, `--lam-w` also affects `plain` and `strurw`).
+
+### Synthetic experiments
 
 ```bash
-# Table 1 -- ACM <-> DBLP
-python run.py --device cuda real-sweep --dataset acm_dblp --src acm --tar dblp \
-  --methods a2gnn specreg dgsda sagda --models plain plsa pairalign strurw --seeds 0 1 2 3 4
-python run.py --device cuda real-sweep --dataset acm_dblp --src dblp --tar acm \
-  --methods a2gnn specreg dgsda sagda --models plain plsa pairalign strurw --seeds 0 1 2 3 4
-
-# Table 2 -- Twitch
-python run.py --device cuda real-sweep --dataset twitch --src DE --tar ENGB \
-  --methods a2gnn specreg dgsda sagda --models plain plsa pairalign strurw --seeds 0 1 2 3 4
-python run.py --device cuda real-sweep --dataset twitch --src ENGB --tar DE \
-  --methods a2gnn specreg dgsda sagda --models plain plsa pairalign strurw --seeds 0 1 2 3 4
-
-# Table 3 -- CORA, L=6 and L=8
-python run.py --device cuda real-sweep --dataset cora --k-labels 6 \
-  --methods a2gnn specreg dgsda sagda --models plain plsa pairalign strurw --seeds 0 1 2 3 4
-python run.py --device cuda real-sweep --dataset cora --k-labels 8 \
-  --methods a2gnn specreg dgsda sagda --models plain plsa pairalign strurw --seeds 0 1 2 3 4
-
-# Table 4 -- Airport
-python run.py --device cuda real-sweep --dataset airport --src usa --tar brazil \
-  --methods a2gnn specreg dgsda sagda --models plain plsa pairalign strurw --seeds 0 1 2 3 4
-python run.py --device cuda real-sweep --dataset airport --src usa --tar europe \
-  --methods a2gnn specreg dgsda sagda --models plain plsa pairalign strurw --seeds 0 1 2 3 4
-
 # Table 5 -- calibration ablation
 python run.py --device cuda csbm-calib --seeds 0 1 2 3 4 --methods plsa_cal plsa_uncal pairalign
 
