@@ -1,7 +1,6 @@
 # A Unified Pairwise Distribution Matching Framework for Graph Domain Adaptation under Structure Shift
 
-Reproduction code for the paper's CSBM (synthetic) and real-data (ACM/DBLP,
-Twitch, CORA, Airport) experiments.
+Code to reproduce the numerical results in the paper.
 
 ## Repository layout
 
@@ -24,9 +23,6 @@ pip install torch==2.4.1 --index-url https://download.pytorch.org/whl/cu121
 pip install torch_geometric==2.6.1
 pip install -r requirements.txt
 ```
-
-(`torch`/`torch_geometric` are installed separately first since the correct
-build depends on your CUDA version; swap `cu121` for your platform.)
 
 ## Datasets
 
